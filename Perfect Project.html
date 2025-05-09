@@ -1,0 +1,308 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhatsApp Chat Viewer</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            max-width: 800px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        h1 {
+            text-align: center;
+        }
+        #chat-display {
+            margin-top: 20px;
+        }
+        .chat-editing-section {
+            margin-bottom: 20px;
+            padding: 10px;
+            border: 1px solid #ccc;
+        }
+        .participant {
+            margin-bottom: 10px;
+        }
+        .participant label {
+            display: inline-block;
+            width: 150px;
+        }
+        .participant input {
+            width: 200px;
+        }
+        .chat-section {
+            margin-bottom: 20px;
+            border: 1px solid #ccc;
+            padding: 10px;
+        }
+        .messages {
+            height: 200px;
+            overflow-y: auto;
+            border: 1px solid #ccc;
+            padding: 10px;
+            background-color: #f9f9f9;
+        }
+        .messages p {
+            margin: 5px 0;
+            word-wrap: break-word;
+            white-space: pre-wrap;
+        }
+        button {
+            padding: 10px 20px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
+            margin-top: 10px;
+            margin-right: 10px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <h1>WhatsApp Chat Viewer</h1>
+    <label for="file-input">Select WhatsApp chat files (.txt):</label>
+    <input type="file" id="file-input" multiple accept=".txt">
+    <div id="chat-display"></div>
+
+    <script>
+        const fileInput = document.getElementById('file-input');
+        const chatDisplay = document.getElementById('chat-display');
+        let chats = [];
+        let filesProcessed = 0;
+
+        fileInput.addEventListener('change', function() {
+            chats = [];
+            filesProcessed = 0;
+            chatDisplay.innerHTML = '';
+
+            const files = Array.from(fileInput.files);
+            if (files.length === 0) return;
+
+            files.forEach(file => {
+                const chat = { fileName: file.name, messages: [], participants: [] };
+                chats.push(chat);
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    const text = e.target.result;
+                    const { messages, participants } = parseChatFile(text);
+                    chat.messages = messages;
+                    chat.participants = participants;
+                    filesProcessed++;
+                    if (filesProcessed === files.length) {
+                        showNameEditingInterface();
+                    }
+                };
+                reader.readAsText(file);
+            });
+        });
+
+        function parseChatFile(text) {
+            const lines = text.split('\n');
+            const messages = [];
+            const participants = new Set();
+            let currentMessage = null;
+
+            lines.forEach(line => {
+                line = line.trim();
+                if (!line) return;
+
+                const timestampMatch = line.match(/^(\d{2})\/(\d{2})\/(\d{4}), (\d{1,2}):(\d{2})\s*([ap]m)\s*-\s*/i);
+                if (timestampMatch) {
+                    const day = parseInt(timestampMatch[1], 10);
+                    const month = parseInt(timestampMatch[2], 10);
+                    const year = parseInt(timestampMatch[3], 10);
+                    let hours = parseInt(timestampMatch[4], 10);
+                    const minutes = parseInt(timestampMatch[5], 10);
+                    const meridiem = timestampMatch[6].toLowerCase();
+
+                    if (meridiem === 'pm' && hours < 12) hours += 12;
+                    if (meridiem === 'am' && hours === 12) hours = 0;
+
+                    const timestamp = new Date(year, month - 1, day, hours, minutes);
+                    if (!isNaN(timestamp)) {
+                        const senderMatch = line.match(/-\s*([^:]+):\s*/);
+                        if (senderMatch) {
+                            const sender = senderMatch[1].trim();
+                            participants.add(sender);
+                        }
+                        currentMessage = { timestamp: timestamp, lines: [line] };
+                        messages.push(currentMessage);
+                    }
+                } else if (currentMessage) {
+                    currentMessage.lines.push(line);
+                }
+            });
+            return { messages, participants: Array.from(participants) };
+        }
+
+        function showNameEditingInterface() {
+            chatDisplay.innerHTML = '';
+            chats.forEach((chat, index) => {
+                const section = document.createElement('div');
+                section.className = 'chat-editing-section';
+                section.setAttribute('data-chat-index', index);
+                const h3 = document.createElement('h3');
+                h3.textContent = `Edit Names for: ${chat.fileName}`;
+                section.appendChild(h3);
+                chat.participants.forEach(participant => {
+                    const div = document.createElement('div');
+                    div.className = 'participant';
+                    div.setAttribute('data-original-name', participant);
+                    const label = document.createElement('label');
+                    label.textContent = `${participant}:`;
+                    const input = document.createElement('input');
+                    input.type = 'text';
+                    input.value = participant;
+                    div.appendChild(label);
+                    div.appendChild(input);
+                    section.appendChild(div);
+                });
+                chatDisplay.appendChild(section);
+            });
+            const proceedBtn = document.createElement('button');
+            proceedBtn.id = 'proceed-btn';
+            proceedBtn.textContent = 'Proceed';
+            proceedBtn.addEventListener('click', proceedToDisplay);
+            chatDisplay.appendChild(proceedBtn);
+        }
+
+        function proceedToDisplay() {
+            chats.forEach((chat, index) => {
+                const section = document.querySelector(`.chat-editing-section[data-chat-index="${index}"]`);
+                const nameMapping = {};
+                section.querySelectorAll('.participant').forEach(participantDiv => {
+                    const originalName = participantDiv.getAttribute('data-original-name');
+                    const newName = participantDiv.querySelector('input').value.trim();
+                    if (newName) nameMapping[originalName] = newName;
+                });
+                chat.messages.forEach(message => updateMessageNames(message, nameMapping));
+            });
+            document.querySelectorAll('.chat-editing-section').forEach(section => section.style.display = 'none');
+            document.getElementById('proceed-btn').style.display = 'none';
+            processAndDisplayChats();
+        }
+
+        function updateMessageNames(message, nameMapping) {
+            const firstLine = message.lines[0];
+            const match = firstLine.match(/^(.+? - )([^:]+)(: .*)$/);
+            if (match) {
+                const prefix = match[1];
+                const originalSender = match[2].trim();
+                const suffix = match[3];
+                const newSender = nameMapping[originalSender] || originalSender;
+                message.lines[0] = prefix + newSender + suffix;
+            }
+        }
+
+        function processAndDisplayChats() {
+            chats.forEach((chat, index) => {
+                const chatSection = document.createElement('div');
+                chatSection.className = 'chat-section';
+                const h3 = document.createElement('h3');
+                h3.textContent = `Chat: ${chat.fileName}`;
+                const messagesDiv = document.createElement('div');
+                messagesDiv.className = 'messages';
+                chat.messages.forEach(message => {
+                    const p = document.createElement('p');
+                    p.textContent = message.lines.join('\n');
+                    messagesDiv.appendChild(p);
+                });
+                const downloadBtn = document.createElement('button');
+                downloadBtn.textContent = 'Download This Chat';
+                downloadBtn.addEventListener('click', function() {
+                    downloadChat(chat);
+                });
+                chatSection.appendChild(h3);
+                chatSection.appendChild(messagesDiv);
+                chatSection.appendChild(downloadBtn);
+                chatDisplay.appendChild(chatSection);
+            });
+            if (chats.length > 1) {
+                const mergeBtn = document.createElement('button');
+                mergeBtn.textContent = 'Download All Merged';
+                mergeBtn.addEventListener('click', downloadAllMerged);
+                chatDisplay.appendChild(mergeBtn);
+            }
+        }
+
+        function downloadChat(chat) {
+            const text = chat.messages.flatMap(message => message.lines).join('\n');
+            const blob = new Blob([text], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = chat.fileName;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        function downloadAllMerged() {
+            let mergedText = '';
+            chats.forEach(chat => {
+                mergedText += `----- ${chat.fileName} -----\n`;
+                mergedText += chat.messages.flatMap(message => message.lines).join('\n') + '\n\n';
+            });
+            const blob = new Blob([mergedText], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'merged_chats.txt';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+    </script>
+</body>
+</html>
